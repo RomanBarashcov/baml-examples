@@ -11,6 +11,6 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": [
-    "src/main.ts", "baml_client/**/*.ts"],
+    "src/**/*.ts", "baml_client/**/*.ts"],
   "exclude": ["node_modules"]
 }
