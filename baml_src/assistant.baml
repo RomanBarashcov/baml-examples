@@ -1,30 +1,49 @@
 
-class WeatherAPI {
-    api_name "weather_request"
+class WeatherTool {
+    name "weather_request"
     city string
 }
 
-class MovieAPI {
-    api_name "movie_request"
+class MovieTool {
+    name "movie_request"
     action "search" | "top"
 }
 
-class MusicAPI {
-    api_name "music_request"
+class MusicTool {
+    name "music_request"
     action "search" | "top"
 }
 
-class SkipAPICall {
-    api_name "skip_api_call" @description("Skip API call when user request is not related to other APIs")
+class SkipTool {
+    name "skip_tool_call" @description("Skip tool call when user request is not related to other tools")
     action "skip"
 }
 
-function UseTool(user_input: string) -> WeatherAPI | MovieAPI | MusicAPI | SkipAPICall {
+function ExtractWeatherParams(user_input: string) -> WeatherTool {
     client "LFModel"
     prompt #"
-        Classify the user request and extract structured data.
+        Extract the city name from this weather request.
         {{ ctx.output_format }}
+        {{ _.role('user') }}
+        {{ user_input }}
+    "#
+}
 
+function ExtractMovieParams(user_input: string) -> MovieTool {
+    client "LFModel"
+    prompt #"
+        Determine whether the user wants to search for a specific movie or see top/popular movies.
+        {{ ctx.output_format }}
+        {{ _.role('user') }}
+        {{ user_input }}
+    "#
+}
+
+function ExtractMusicParams(user_input: string) -> MusicTool {
+    client "LFModel"
+    prompt #"
+        Determine whether the user wants to search for specific music or see top/popular music.
+        {{ ctx.output_format }}
         {{ _.role('user') }}
         {{ user_input }}
     "#

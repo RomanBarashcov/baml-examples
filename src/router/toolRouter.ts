@@ -1,7 +1,7 @@
-import { WeatherAPI, MovieAPI, MusicAPI, SkipAPICall } from "../../baml_client";
+import { WeatherTool, MovieTool, MusicTool, SkipTool } from "../../baml_client";
+import { b } from "../../baml_client";
 import { fetchEmbedding } from "./embeddings";
 import { VectorStore } from "./vectorStore";
-import { extractWeatherCity, extractListAction } from "./paramExtractor";
 
 const EXAMPLES: { tool: string; phrases: string[] }[] = [
   {
@@ -109,23 +109,23 @@ export class ToolRouter {
    * @returns a typed API descriptor ready for the tool switch in main.ts
    * @throws if the Ollama embedding API is unavailable
    */
-  async route(input: string): Promise<WeatherAPI | MovieAPI | MusicAPI | SkipAPICall> {
+  async route(input: string): Promise<WeatherTool | MovieTool | MusicTool | SkipTool> {
     const queryEmbedding = await fetchEmbedding(input);
     const { tool, score } = this.store.search(queryEmbedding);
 
     if (score < this.CONFIDENCE_THRESHOLD) {
-      return { api_name: "skip_api_call", action: "skip" };
+      return { name: "skip_tool_call", action: "skip" };
     }
 
     switch (tool) {
       case "weather_request":
-        return { api_name: "weather_request", city: extractWeatherCity(input) };
+        return await b.ExtractWeatherParams(input);
       case "movie_request":
-        return { api_name: "movie_request", action: extractListAction(input) };
+        return await b.ExtractMovieParams(input);
       case "music_request":
-        return { api_name: "music_request", action: extractListAction(input) };
+        return await b.ExtractMusicParams(input);
       default:
-        return { api_name: "skip_api_call", action: "skip" };
+        return { name: "skip_tool_call", action: "skip" };
     }
   }
 }

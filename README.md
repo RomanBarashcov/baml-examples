@@ -6,21 +6,21 @@ A simple demonstration of how to build an AI assistant with **function calling**
 
 BAML lets you define LLM functions with typed inputs/outputs in `.baml` files. This project demonstrates:
 
-- **Tool routing** — classifies a user message and selects the right API to call (two strategies — see below)
-- **Typed outputs** — BAML enforces structured responses (union types as discriminated tool selections)
+- **Hybrid tool routing** — vector similarity selects the tool (~50ms), then a BAML LLM function extracts typed parameters
+- **Typed outputs** — BAML enforces structured responses (typed classes for each tool)
 - **Streaming** — real-time streamed assistant responses
 - **Conversation history** — rolling window of the last 10 messages
-- **Session management** — isolated session state with unique IDs
+- **Session management** — isolated session state with UUID, message history, and tool call log
 - **Fallback clients** — automatic failover from OpenAI to local model
 
 ### Tools Available
 
 | Tool | Trigger example |
 |---|---|
-| `WeatherAPI` | "What's the weather in Tokyo?" |
-| `MovieAPI` | "Show me top movies" / "Search for movies" |
-| `MusicAPI` | "What are the top albums?" / "Search music" |
-| `SkipAPICall` | Any unrelated input — gracefully skipped |
+| `WeatherTool` | "What's the weather in Tokyo?" |
+| `MovieTool` | "Show me top movies" / "Search for movies" |
+| `MusicTool` | "What are the top albums?" / "Search music" |
+| `SkipTool` | Any unrelated input — gracefully skipped |
 
 ### How It Works
 
@@ -28,10 +28,18 @@ BAML lets you define LLM functions with typed inputs/outputs in `.baml` files. T
 User input
     │
     ▼
-toolRouter.route(input) → vector similarity → WeatherAPI | MovieAPI | MusicAPI | SkipAPICall
+toolRouter.route(input)
+    ├─ fetchEmbedding(input)           ~50ms  Ollama embeddings
+    ├─ VectorStore.search()            ~1ms   cosine similarity → tool name
+    └─ b.ExtractWeatherParams(input)   ~LLM   BAML extracts typed params
+         / b.ExtractMovieParams(input)
+         / b.ExtractMusicParams(input)
     │
     ▼
-Handler runs (mock API call)
+WeatherTool | MovieTool | MusicTool | SkipTool  (typed, validated)
+    │
+    ▼
+Handler runs (mock API call), ToolCall logged to session
     │
     ▼
 Chat(messages) → BAML streams a natural language response
@@ -42,44 +50,36 @@ Response printed, added to history
 
 ---
 
-## Vector Store Router
+## Hybrid Router
 
-The project ships two routing strategies. The active one (`src/router/`) replaces the LLM classifier with a **vector similarity router** for dramatically faster tool selection.
+The active routing strategy combines two techniques for the best of both worlds:
 
-### Why Two Strategies?
-
-| | LLM Router (`b.UseTool`) | Vector Router (`toolRouter`) |
+| Stage | Technique | Latency |
 |---|---|---|
-| Latency | 4,000–6,000 ms | 50–150 ms |
-| Startup cost | 0 ms | ~3–5 s (one-time) |
-| Model | `lfm2.5-thinking` (inference) | `nomic-embed-text` (embeddings) |
-| Best for | Complex payloads, many fields | Simple intent + 1–2 params |
+| Tool selection | Vector similarity (`nomic-embed-text`) | ~50–150 ms |
+| Param extraction | BAML LLM function (`LFModel`) | ~500–2000 ms |
 
-### When to Use Each
+**Why hybrid?**
 
-**Use the Vector Router** when:
-- The tool payload is simple — a single field like `city` or a binary `action: "search" | "top"`
-- Low latency matters more than flexibility
-- The number of tools and their meanings are stable
+- Pure vector routing is fast but can't reliably extract structured parameters (e.g. city names, action types) from free-form text
+- Pure LLM routing is flexible but adds 4–6 s of latency just for tool selection
+- Splitting the two tasks gives fast routing + accurate typed param extraction
 
-**Use the LLM Router** when:
-- The payload has multiple fields that require reasoning to fill (e.g. date ranges, filters, nested objects)
-- Tool boundaries are ambiguous and need nuanced understanding
-- You need the model to handle edge cases or paraphrase inputs
-
-### How the Vector Router Works
+### How It Works
 
 ```
 Startup (once, ~3-5s)
     │
-    ├─ Embed ~46 example phrases (14 weather + 12 movie + 12 music + 10 skip)
+    ├─ Embed ~48 example phrases (14 weather + 12 movie + 12 music + 10 skip)
     └─ Store vectors in-memory
 
-Per query (~50-150ms)
+Per query
     │
-    ├─ fetchEmbedding(userInput)        ~50ms  Ollama API call
-    ├─ VectorStore.search()             ~1ms   cosine similarity scan
-    └─ paramExtractor (regex)          <1ms   extract city / action
+    ├─ fetchEmbedding(userInput)          ~50ms   Ollama API call
+    ├─ VectorStore.search()               ~1ms    cosine similarity → tool name
+    └─ b.ExtractWeatherParams(input)      ~LLM    BAML typed extraction
+         / b.ExtractMovieParams(input)
+         / b.ExtractMusicParams(input)
 ```
 
 ### Example: Adding a New Tool
@@ -98,13 +98,22 @@ Per query (~50-150ms)
 },
 ```
 
-2. **Add param extraction** in `src/router/paramExtractor.ts` if the tool has parameters:
+2. **Add a BAML extraction function** in `baml_src/assistant.baml`:
 
-```typescript
-export function extractNewsCategory(input: string): string {
-  if (/\b(sport|sports)\b/i.test(input)) return "sports";
-  if (/\b(tech|technology)\b/i.test(input)) return "technology";
-  return "general";
+```baml
+class NewsTool {
+    name "news_request"
+    category string
+}
+
+function ExtractNewsParams(user_input: string) -> NewsTool {
+    client "LFModel"
+    prompt #"
+        Extract the news category from this request.
+        {{ ctx.output_format }}
+        {{ _.role('user') }}
+        {{ user_input }}
+    "#
 }
 ```
 
@@ -112,14 +121,12 @@ export function extractNewsCategory(input: string): string {
 
 ```typescript
 case "news_request":
-  return { api_name: "news_request", category: extractNewsCategory(input) };
+  return await b.ExtractNewsParams(input);
 ```
-
-> **Note:** The Vector Router works well here because `news_request` has a single straightforward field (`category`). If your tool needs to extract a structured date range like `{ from: "2026-01-01", to: "2026-03-01" }`, the LLM router is a better fit — regex cannot reliably parse that kind of payload.
 
 ### Confidence Threshold
 
-The router falls back to `SkipAPICall` when the best similarity score is below `0.35` (configured in `ToolRouter`). Raise this value to make routing stricter; lower it to be more permissive.
+The router falls back to `SkipTool` when the best similarity score is below `0.35` (configured in `ToolRouter`). Raise this value to make routing stricter; lower it to be more permissive.
 
 ## Quick Setup
 
@@ -155,7 +162,7 @@ Create a `.env` file in the project root:
 OPENAI_API_KEY=sk-...
 ```
 
-Then update `baml_src/clients.baml` to change the `UseTool`, `Chat`, and `SummarizeHistory` functions to use `CustomGPT5` (or `OpenaiFallback` for automatic failover to the local model) instead of `LFModel`.
+Then update `baml_src/clients.baml` to change the `ExtractWeatherParams`, `ExtractMovieParams`, `ExtractMusicParams`, `Chat`, and `SummarizeHistory` functions to use `CustomGPT5` (or `OpenaiFallback` for automatic failover to the local model) instead of `LFModel`.
 
 ### 3. Generate the BAML client
 
@@ -187,30 +194,44 @@ Exiting...
 ```
 awesome-baml-framework/
 ├── baml_src/
-│   ├── assistant.baml   # BAML functions: UseTool, Chat, SummarizeHistory
+│   ├── assistant.baml   # BAML types + functions: ExtractWeatherParams, ExtractMovieParams,
+│   │                    #   ExtractMusicParams, Chat, SummarizeHistory
 │   ├── clients.baml     # LLM client config (Ollama, OpenAI, fallback, retry policies)
 │   └── generators.baml  # TypeScript code generation config
 ├── baml_client/         # Auto-generated TypeScript client (do not edit)
 ├── src/
 │   ├── main.ts              # Main assistant loop with tool handlers
-│   ├── session.ts           # Session class (messages + UUID)
-│   ├── state.ts             # State class (session registry)
+│   ├── state/
+│   │   ├── session.ts       # Session class (UUID + messages + toolCalls log)
+│   │   └── toolCall.ts      # ToolCall record (id, name, args, result)
 │   └── router/
-│       ├── toolRouter.ts    # Composition layer — initialize() + route()
+│       ├── toolRouter.ts    # Hybrid router — initialize() + route()
 │       ├── vectorStore.ts   # In-memory cosine similarity store
-│       ├── embeddings.ts    # Ollama embeddings API client
-│       └── paramExtractor.ts # Regex-based city / action extraction
+│       └── embeddings.ts    # Ollama embeddings API client
 └── package.json
 ```
 
 ## BAML Concepts Highlighted
 
-**Union type tool selection** (`assistant.baml`):
+**Typed tool classes** (`assistant.baml`):
 ```baml
-function UseTool(user_input: string) -> WeatherAPI | MovieAPI | MusicAPI | SkipAPICall {
+class WeatherTool {
+    name "weather_request"
+    city string
+}
+
+class MovieTool {
+    name "movie_request"
+    action "search" | "top"
+}
+```
+
+**Dedicated extraction functions per tool**:
+```baml
+function ExtractWeatherParams(user_input: string) -> WeatherTool {
     client "LFModel"
     prompt #"
-        Classify the user request and extract structured data.
+        Extract the city name from this weather request.
         {{ ctx.output_format }}
         {{ _.role('user') }}
         {{ user_input }}
@@ -218,7 +239,7 @@ function UseTool(user_input: string) -> WeatherAPI | MovieAPI | MusicAPI | SkipA
 }
 ```
 
-BAML automatically generates the output schema and parses the LLM response into the correct typed class — no manual JSON parsing needed.
+BAML automatically generates the output schema and parses the LLM response into the correct typed class — no manual JSON parsing needed. Each extraction function is focused and minimal, keeping prompts small and fast.
 
 ## Scripts
 

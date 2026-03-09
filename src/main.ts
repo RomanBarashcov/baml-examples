@@ -1,9 +1,9 @@
 import "dotenv/config";
-import { b, Message, MovieAPI, MusicAPI, WeatherAPI, SkipAPICall } from "../baml_client";
+import { b, Message, MovieTool, MusicTool, WeatherTool, SkipTool } from "../baml_client";
 import * as readline from "readline";
 import { BamlStream } from "@boundaryml/baml";
-import { State } from "./state";
-import { Session } from "./sesstion";
+import { Session } from "./state/session";
+import { ToolCall } from "./state/toolCall";
 import { toolRouter } from "./router/toolRouter";
 
 const rl = readline.createInterface({
@@ -41,7 +41,7 @@ function askQuestion(query: string): Promise<string> {
  */
 function weatherHandler(city: string): string {
   console.log(`Fetching weather for ${city}...`);
-  return `In ${city} right now +6с`
+  return `In ${city} right now +25с`
 }
 
 /**
@@ -113,10 +113,7 @@ async function streamHandler(stream: BamlStream<string, string>): Promise<string
  */
 async function main() {
   let executing = true;
-
   const session = new Session();
-  const state = new State();
-  state.addSession(session);
 
   await toolRouter.initialize();
 
@@ -131,17 +128,25 @@ async function main() {
 
     session.messages.push({ role: "user", content });
 
-    let useToolResponse: WeatherAPI | MovieAPI | MusicAPI | SkipAPICall;
+    let useToolResponse: WeatherTool | MovieTool | MusicTool | SkipTool;
     try {
       useToolResponse = await toolRouter.route(content);
+
+      const toolCall = new ToolCall(
+        session.toolCalls.length + 1,
+        useToolResponse.name,
+        JSON.stringify(useToolResponse)
+      );
+
+      session.toolCalls.push(toolCall);
     } catch (error) {
       console.error("Sorry, I couldn't understand your request. Please try again.");
       continue;
     }
 
     let toolResponse: string;
-    switch (useToolResponse.api_name) {
-      case "skip_api_call":
+    switch (useToolResponse.name) {
+      case "skip_tool_call":
         console.log("Skipping API call...");
         toolResponse = "Sorry, I couldn't understand your request. Please try again.";
         break;
