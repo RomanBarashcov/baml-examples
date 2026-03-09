@@ -4,6 +4,7 @@ import * as readline from "readline";
 import { BamlStream } from "@boundaryml/baml";
 import { State } from "./state";
 import { Session } from "./sesstion";
+import { toolRouter } from "./router/toolRouter";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -117,6 +118,8 @@ async function main() {
   const state = new State();
   state.addSession(session);
 
+  await toolRouter.initialize();
+
   while (executing) {
     let content = await askQuestion("Enter your message (or 'quit' to exit): ");
 
@@ -130,7 +133,7 @@ async function main() {
 
     let useToolResponse: WeatherAPI | MovieAPI | MusicAPI | SkipAPICall;
     try {
-      useToolResponse = await b.UseTool(content);
+      useToolResponse = await toolRouter.route(content);
     } catch (error) {
       console.error("Sorry, I couldn't understand your request. Please try again.");
       continue;
