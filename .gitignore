@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+.idea/
+
+.vscode/
+
+.dist/
+
+# Build output
+dist/
+
+# Auto-generated BAML client
+baml_client/
+
+# Environment variables
+.env
+
+# TypeScript build info
+*.tsbuildinfo
+
+# macOS
+.DS_Store
