@@ -194,13 +194,16 @@ Exiting...
 ```
 awesome-baml-framework/
 ├── baml_src/
-│   ├── assistant.baml   # BAML types + functions: ExtractWeatherParams, ExtractMovieParams,
-│   │                    #   ExtractMusicParams, Chat, SummarizeHistory
+│   ├── assistant.baml   # BAML types + functions + 16 test blocks
+│   │                    #   (ExtractWeatherParams, ExtractMovieParams, ExtractMusicParams,
+│   │                    #    Chat, SummarizeHistory, SkipTool proxy tests)
+│   ├── evals.baml       # EvalResult class + EvaluateToolCall LLM-judge function
 │   ├── clients.baml     # LLM client config (Ollama, OpenAI, fallback, retry policies)
 │   └── generators.baml  # TypeScript code generation config
 ├── baml_client/         # Auto-generated TypeScript client (do not edit)
 ├── src/
 │   ├── main.ts              # Main assistant loop with tool handlers
+│   ├── eval.test.ts         # Vitest eval runner — 16 LLM-as-judge test cases
 │   ├── state/
 │   │   ├── session.ts       # Session class (UUID + messages + toolCalls log)
 │   │   └── toolCall.ts      # ToolCall record (id, name, args, result)
@@ -208,6 +211,7 @@ awesome-baml-framework/
 │       ├── toolRouter.ts    # Hybrid router — initialize() + route()
 │       ├── vectorStore.ts   # In-memory cosine similarity store
 │       └── embeddings.ts    # Ollama embeddings API client
+├── vitest.config.ts     # Vitest config (120s timeout for LLM calls)
 └── package.json
 ```
 
@@ -241,6 +245,56 @@ function ExtractWeatherParams(user_input: string) -> WeatherTool {
 
 BAML automatically generates the output schema and parses the LLM response into the correct typed class — no manual JSON parsing needed. Each extraction function is focused and minimal, keeping prompts small and fast.
 
+## Testing & Evaluation
+
+### BAML test blocks (`npm run test:baml`)
+
+Runs all test blocks defined directly in `.baml` files against your local LLM:
+
+```bash
+npm run test:baml
+
+# Run tests for a specific function only:
+npx baml-cli test -i "ExtractWeatherParams::"
+
+# Run a single named test:
+npx baml-cli test -i "ExtractWeatherParams::WeatherTest_BasicCity"
+```
+
+There are 16 test blocks across `assistant.baml`:
+
+| Group | Tests |
+|---|---|
+| `ExtractWeatherParams` | BasicCity, RainingQuery, TemperatureQuery, ForecastQuery |
+| `ExtractMovieParams` | TopMovies, SearchByTitle, PopularFilms, SearchByActor |
+| `ExtractMusicParams` | TopSongs, SearchArtist, BestAlbums, SearchAlbum |
+| SkipTool (via `Chat`) | Greeting, Joke, Math, Identity |
+
+### LLM-as-judge evals (`npm run eval`)
+
+Runs 16 programmatic eval cases using Vitest. Each case:
+1. Calls the appropriate `Extract*` BAML function (or hardcodes the skip response)
+2. Calls `EvaluateToolCall` (defined in `evals.baml`) to judge whether the output is correct
+3. Asserts `result.passed === true`
+
+```bash
+npm run eval
+```
+
+Expected output:
+```
+Tool call evaluations (LLM-as-judge)
+  ✓ Weather: basic city
+  ✓ Weather: raining query
+  ...
+  ✓ Skip: identity
+
+Test Files  1 passed (1)
+Tests       16 passed (16)
+```
+
+`process.exit(1)` on failures makes this CI-friendly.
+
 ## Scripts
 
 | Command | Description |
@@ -248,6 +302,8 @@ BAML automatically generates the output schema and parses the LLM response into 
 | `npm run baml-generate` | Regenerate `baml_client/` from `baml_src/` |
 | `npm run build` | Generate client + compile TypeScript |
 | `npm start` | Build and run the assistant |
+| `npm run test:baml` | Run all BAML test blocks via `baml-cli test` |
+| `npm run eval` | Run 16 LLM-as-judge eval cases via Vitest |
 
 ## Learn More
 

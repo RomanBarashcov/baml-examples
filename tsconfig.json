@@ -12,5 +12,5 @@
   },
   "include": [
     "src/**/*.ts", "baml_client/**/*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src/**/*.test.ts"]
 }

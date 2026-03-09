@@ -9,11 +9,14 @@
   "scripts": {
     "baml-generate": "baml-cli generate",
     "build": "npm run baml-generate && tsc --build",
-    "start": "npm run build && node dist/src/main.js"
+    "start": "npm run build && node dist/src/main.js",
+    "eval": "npm run baml-generate && vitest run src/eval.test.ts",
+    "test:baml": "baml-cli test"
   },
   "devDependencies": {
     "@types/node": "^25.3.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   },
   "dependencies": {
     "@boundaryml/baml": "^0.219.0",
