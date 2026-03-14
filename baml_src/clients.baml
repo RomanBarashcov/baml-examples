@@ -1,10 +1,10 @@
 // Learn more about clients at https://docs.boundaryml.com/docs/snippets/clients/overview
 
 // Using the new OpenAI Responses API for enhanced formatting
-client<llm> CustomGPT5 {
+client<llm> CustomGPT4oMini {
   provider openai-responses
   options {
-    model "gpt-5"
+    model "gpt-4o-mini"
     api_key env.OPENAI_API_KEY
   }
 }
@@ -24,7 +24,7 @@ client<llm> OpenaiFallback {
   provider fallback
   options {
     // This will try the clients in order until one succeeds
-    strategy [CustomGPT5, LFModel]
+    strategy [CustomGPT4oMini, LFModel]
   }
 }
 

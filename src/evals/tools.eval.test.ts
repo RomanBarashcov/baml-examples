@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
-import { b } from "../baml_client";
+import { b } from "../../baml_client";
 
 type ToolName = "weather_request" | "movie_request" | "music_request" | "skip_tool_call";
 
@@ -13,7 +13,7 @@ interface EvalCase {
 
 const EVAL_CASES: EvalCase[] = [
   // WeatherTool
-  { label: "Weather: forecast query", tool: "weather_request", input: "Will it snow in Moscow this week?", expected: { name: "weather_request", city: "Kyiv" } },
+  { label: "Weather: forecast query", tool: "weather_request", input: "Will it snow in Kyiv this week?", expected: { name: "weather_request", city: "Kyiv" } },
   // { label: "Weather: basic city", tool: "weather_request", input: "What is the weather in Tokyo?", expected: { name: "weather_request", city: "Tokyo" } },
   // { label: "Weather: raining query", tool: "weather_request", input: "Is it raining in London right now?", expected: { name: "weather_request", city: "London" } },
   // { label: "Weather: temperature query", tool: "weather_request", input: "What is the temperature in New York?", expected: { name: "weather_request", city: "New York" } },
@@ -40,9 +40,9 @@ const EVAL_CASES: EvalCase[] = [
 async function runExtract(tc: EvalCase): Promise<object> {
   switch (tc.tool) {
     case "weather_request": return await b.ExtractWeatherParams(tc.input);
-    case "movie_request": return await b.ExtractMovieParams(tc.input);
-    case "music_request": return await b.ExtractMusicParams(tc.input);
-    case "skip_tool_call": return { name: "skip_tool_call", action: "skip" };
+    case "movie_request":   return await b.ExtractMovieParams(tc.input);
+    case "music_request":   return await b.ExtractMusicParams(tc.input);
+    case "skip_tool_call":  return { name: "skip_tool_call", action: "skip" };
   }
 }
 

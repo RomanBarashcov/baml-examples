@@ -5,12 +5,14 @@ import { BamlStream } from "@boundaryml/baml";
 import { Session } from "./state/session";
 import { ToolCall } from "./state/toolCall";
 import { toolRouter } from "./router/toolRouter";
+import { weatherHandler, WeatherToolResponse } from "./tools/weatherTool";
+import { movieHandler, MovieToolResponse } from "./tools/movieTool";
+import { musicHandler, MusicToolResponse } from "./tools/musicTool";
 
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
 });
-
 
 const MAX_HISTORY = 10;
 
@@ -32,56 +34,6 @@ function askQuestion(query: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(query, resolve);
   });
-}
-
-/**
- * weatherHandler - returned weather info
- * @param city - city name
- * @returns string
- */
-function weatherHandler(city: string): string {
-  console.log(`Fetching weather for ${city}...`);
-  return `In ${city} right now +25с`
-}
-
-/**
- * movieHandler - returned list of movies
- * @param action - top or search
- * @returns string
- * */
-function movieHandler(action: string): string {
-  console.log(`Fetching movie ${action}...`);
-
-  let movies = ["Avatar: Fire and Ash", "Zootopia 2", "The Mandalorian and Grogu", "28 Years Later: The Bone Temple", "Avengers: Doomsday"];
-
-  switch (action) {
-    case "top":
-      return `Here is a top 5 movies in this 2026 year: ${movies.join(", ")}`;
-    case "search":
-      return `Here is a list of movies by user search: ${movies.join(", ")}`;
-  }
-
-  return `Incorrect action: ${action}`;
-}
-
-/**
- * musicHandler - returned list of music
- * @param action - top or search
- * @returns string
- */
-function musicHandler(action: string): string {
-  console.log(`Fetching music ${action}...`);
-
-  let albums = ["J. Cole - The Fall-Off", "A$AP Rocky - Don't Be Dumb", "Converge - Love Is Not Enough", "Jill Scott - To Whom This May Concern", "By Storm - My Ghosts Go Ghost"]
-
-  switch (action) {
-    case "top":
-      return `Here is a top 5 music albums in this 2026 year: ${albums.join(", ")}`;
-    case "search":
-      return `Here is a list of music albums by user search: ${albums.join(", ")}`;
-  }
-
-  return `Incorrect action: ${action}`;
 }
 
 /**
@@ -139,28 +91,38 @@ async function main() {
       );
 
       session.toolCalls.push(toolCall);
+      session.messages.push({ role: "tool", content: `Calling tool: ${useToolResponse.name} with params: ${JSON.stringify(useToolResponse)}` });
     } catch (error) {
       console.error("Sorry, I couldn't understand your request. Please try again.");
       continue;
     }
 
-    let toolResponse: string;
-    switch (useToolResponse.name) {
-      case "skip_tool_call":
-        console.log("Skipping API call...");
-        toolResponse = "Sorry, I couldn't understand your request. Please try again.";
-        break;
-      case "weather_request":
-        toolResponse = weatherHandler(useToolResponse.city);
-        break;
-      case "movie_request":
-        toolResponse = movieHandler(useToolResponse.action);
-        break;
-      case "music_request":
-        toolResponse = musicHandler(useToolResponse.action);
+    if (useToolResponse.name !== "skip_tool_call") {
+      let toolResponse: string;
+      switch (useToolResponse.name) {
+        case "weather_request":
+          toolResponse = (weatherHandler(useToolResponse.city) as WeatherToolResponse).context;
+          break;
+        case "movie_request":
+          toolResponse = (movieHandler(useToolResponse.action) as MovieToolResponse).context;
+          break;
+        case "music_request":
+          toolResponse = (musicHandler(useToolResponse.action) as MusicToolResponse).context;
+          break;
+      }
+      session.messages.push({ role: "tool", content: toolResponse });
+    } else {
+      // Remove the "Calling tool: skip_tool_call" message we just pushed —
+      // it adds noise and causes the LLM to think it can't answer from context.
+      session.messages.pop();
     }
 
-    session.messages.push({ role: "assistant", content: toolResponse });
+    const { in_scope: inScope } = await b.IsInScope(content);
+    if (!inScope) {
+      console.log("Assistant: I can only help with weather, movies, and music.");
+      session.messages.push({ role: "assistant", content: "I can only help with weather, movies, and music." });
+      continue;
+    }
 
     const stream = b.stream.Chat(getRecentHistory(session.messages));
     const agentResponse = await streamHandler(stream);

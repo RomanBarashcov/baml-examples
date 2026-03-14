@@ -37,17 +37,34 @@ export class VectorStore {
   }
 
   /**
-   * search - finds the closest tool to the given query embedding via brute-force cosine scan.
+   * search - finds the best tool by averaging the top-k cosine similarity scores per tool.
+   * This is more robust than nearest-neighbor when domains share structural phrase patterns
+   * (e.g. "best movies right now" vs "best albums right now").
    * Falls back to `"skip_api_call"` if the store is empty.
    * @param queryEmbedding - the embedding of the user's input
-   * @returns the best-matching tool name and its similarity score
+   * @param k - number of top examples per tool to average (default: 3)
+   * @returns the best-matching tool name and its aggregated similarity score
    */
-  search(queryEmbedding: number[]): { tool: string; score: number } {
+  search(queryEmbedding: number[], k = 3): { tool: string; score: number } {
+    // Score every entry
+    const scored = this.entries.map((entry) => ({
+      tool: entry.tool,
+      score: cosineSimilarity(queryEmbedding, entry.embedding),
+    }));
+
+    // Group scores by tool, keep top-k per tool, then average them
+    const toolScores = new Map<string, number[]>();
+    for (const { tool, score } of scored) {
+      if (!toolScores.has(tool)) toolScores.set(tool, []);
+      toolScores.get(tool)!.push(score);
+    }
+
     let best = { tool: "skip_api_call", score: -Infinity };
-    for (const entry of this.entries) {
-      const score = cosineSimilarity(queryEmbedding, entry.embedding);
-      if (score > best.score) {
-        best = { tool: entry.tool, score };
+    for (const [tool, scores] of toolScores) {
+      const topK = scores.sort((a, b) => b - a).slice(0, k);
+      const avg = topK.reduce((s, x) => s + x, 0) / topK.length;
+      if (avg > best.score) {
+        best = { tool, score: avg };
       }
     }
     return best;

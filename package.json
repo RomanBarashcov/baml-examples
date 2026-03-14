@@ -10,7 +10,11 @@
     "baml-generate": "baml-cli generate",
     "build": "npm run baml-generate && tsc --build",
     "start": "npm run build && node dist/src/main.js",
-    "eval": "npm run baml-generate && vitest run src/eval.test.ts",
+    "eval": "npm run baml-generate && vitest run src/evals/",
+    "eval:router": "npm run baml-generate && vitest run src/evals/router.eval.test.ts",
+    "eval:scope": "npm run baml-generate && vitest run src/evals/scope.eval.test.ts",
+    "eval:context": "npm run baml-generate && vitest run src/evals/context.eval.test.ts",
+    "eval:tools": "npm run baml-generate && vitest run src/evals/tools.eval.test.ts",
     "test:baml": "baml-cli test"
   },
   "devDependencies": {
@@ -19,7 +23,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@boundaryml/baml": "^0.219.0",
+    "@boundaryml/baml": "^0.220.0",
     "dotenv": "^17.3.1"
   }
 }

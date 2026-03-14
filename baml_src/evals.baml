@@ -3,6 +3,30 @@ class EvalResult {
     reasoning string
 }
 
+function EvaluateChat(
+    conversation: string,
+    actual_response: string,
+    expectation: string
+) -> EvalResult {
+    client "LFModel"
+    prompt #"
+        You are an evaluation judge for a conversational assistant.
+        Given a conversation (including tool responses), the assistant's actual reply, and a plain-English expectation, determine whether the reply satisfies the expectation.
+
+        Consider it PASSED if the assistant's reply addresses the expectation using information present in the conversation.
+        Consider it FAILED if the assistant says it cannot answer, hallucinates facts not in the conversation, or ignores relevant context.
+
+        {{ ctx.output_format }}
+
+        {{ _.role('user') }}
+        Conversation:
+        {{ conversation }}
+
+        Assistant reply: {{ actual_response }}
+        Expectation: {{ expectation }}
+    "#
+}
+
 function EvaluateToolCall(
     user_input: string,
     actual_output: string,
