@@ -135,7 +135,7 @@ test WeatherTest_TemperatureQuery {
 }
 test WeatherTest_ForecastQuery {
     functions [ExtractWeatherParams]
-    args { user_input "Will it snow in Moscow this week?" }
+    args { user_input "Will it snow in Kyiv this week?" }
 }
 
 // ExtractMovieParams tests

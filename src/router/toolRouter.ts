@@ -11,7 +11,7 @@ const EXAMPLES: { tool: string; phrases: string[] }[] = [
       "Is it raining in London?",
       "What's the temperature in New York?",
       "How's the weather in Paris today?",
-      "Will it snow in Moscow this week?",
+      "Will it snow in Kyiv this week?",
       "Weather forecast for Berlin",
       "Is it sunny in Sydney?",
       "Should I bring an umbrella in Seattle?",
