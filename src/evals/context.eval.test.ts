@@ -34,7 +34,7 @@ const CONTEXT_FOLLOWUP_CASES: { label: string; history: { role: "user" | "assist
     history: [
       { role: "user", content: "what is best music right now?" },
       { role: "tool", content: MUSIC_TOOL_CONTEXT },
-      { role: "assistant", content: "Here are the top albums right now: J. Cole (8.8), Jill Scott (8.5), A$AP Rocky (8.2)." },
+      { role: "assistant", content: "Here are the top albums right now: J. Cole [Hip-Hop] (8.8), Jill Scott [Soul] (8.5), A$AP Rocky [Rap] (8.2)." },
     ],
     followUp: "what genre is Jill Scott?",
     expectation: "The assistant answers that Jill Scott is Soul genre based on the tool context.",

@@ -1,92 +1,53 @@
-import { WeatherTool, MovieTool, MusicTool, SkipTool } from "../../baml_client";
-import { b } from "../../baml_client";
+import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { b, WeatherTool, MovieTool, MusicTool, SkipTool } from "../../baml_client";
 import { fetchEmbedding } from "./embeddings";
 import { VectorStore } from "./vectorStore";
+import { EXAMPLES } from "./examples";
 
-const EXAMPLES: { tool: string; phrases: string[] }[] = [
-  {
-    tool: "weather_request",
-    phrases: [
-      "What's the weather in Tokyo?",
-      "Is it raining in London?",
-      "What's the temperature in New York?",
-      "How's the weather in Paris today?",
-      "Will it snow in Kyiv this week?",
-      "Weather forecast for Berlin",
-      "Is it sunny in Sydney?",
-      "Should I bring an umbrella in Seattle?",
-      "What's the weather like in Dubai?",
-      "How cold is it in Chicago?",
-      "Weather in Miami right now",
-      "Is it hot in Phoenix?",
-      "Tell me the weather for Toronto",
-      "Current weather in Los Angeles",
-    ],
-  },
-  {
-    tool: "movie_request",
-    phrases: [
-      "Show me top movies",
-      "What are the best movies right now?",
-      "Search for Avatar",
-      "Find the movie Inception",
-      "Top rated films this year",
-      "Look up movies by Christopher Nolan",
-      "Popular movies 2026",
-      "Trending films right now",
-      "Search movies with Tom Hanks",
-      "Best action movies",
-      "Find movie Zootopia 2",
-      "What movies are popular?",
-    ],
-  },
-  {
-    tool: "music_request",
-    phrases: [
-      "What are the top songs?",
-      "Search for Taylor Swift",
-      "Best albums this year",
-      "Find music by Kendrick Lamar",
-      "Top hits right now",
-      "Search for J. Cole albums",
-      "Popular songs 2026",
-      "Trending music",
-      "Look up music by Drake",
-      "Best rap albums",
-      "Find songs by The Weeknd",
-      "What music is popular?",
-    ],
-  },
-  {
-    tool: "skip_api_call",
-    phrases: [
-      "Tell me a joke",
-      "Who are you?",
-      "Hello",
-      "What can you do?",
-      "Help me",
-      "How are you?",
-      "What is the meaning of life?",
-      "Tell me something interesting",
-      "What's 2 + 2?",
-      "Good morning",
-    ],
-  },
-];
+const EMBEDDINGS_PATH = fileURLToPath(new URL("../../data/embeddings.json", import.meta.url));
+const CONFIDENCE_THRESHOLD = 0.35;
+export const HIGH_CONFIDENCE_THRESHOLD = 0.55;
+
+interface EmbeddingEntry {
+  tool: string;
+  example: string;
+  embedding: number[];
+}
+
+export interface ClassifyResult {
+  tool: string;
+  score: number;
+}
+
+export interface RouteResult {
+  result: WeatherTool | MovieTool | MusicTool | SkipTool;
+  score: number;
+}
 
 export class ToolRouter {
-  private store: VectorStore = new VectorStore();
-  private readonly CONFIDENCE_THRESHOLD = 0.35;
+  private readonly store: VectorStore = new VectorStore();
 
   /**
-   * initialize - embeds all example phrases concurrently and populates the vector store.
+   * initialize - populates the vector store with labelled embeddings.
+   * Loads from a precomputed file at `data/embeddings.json` when available (~5ms).
+   * Falls back to live Ollama embedding calls when the file is absent (~3–5s).
    * Must be called once before any calls to `route()`.
-   * Logs progress to stdout. Typically takes 3-5 seconds on first run.
    */
   async initialize(): Promise<void> {
-    console.log("Initializing tool router...");
-    const tasks: Promise<void>[] = [];
+    if (fs.existsSync(EMBEDDINGS_PATH)) {
+      const entries: EmbeddingEntry[] = JSON.parse(fs.readFileSync(EMBEDDINGS_PATH, "utf-8"));
+      for (const { tool, example, embedding } of entries) {
+        this.store.add(tool, example, embedding);
+      }
+      console.log(`Tool router ready (loaded ${entries.length} embeddings from disk).`);
+      return;
+    }
 
+    console.log("Initializing tool router (no precomputed file found, embedding live)...");
+    console.log("Run `npm run precompute` to speed up future startups.");
+
+    const tasks: Promise<void>[] = [];
     for (const { tool, phrases } of EXAMPLES) {
       for (const phrase of phrases) {
         tasks.push(
@@ -102,21 +63,29 @@ export class ToolRouter {
   }
 
   /**
-   * route - classifies the user input into a typed tool call using vector similarity.
-   * Embeds the input, finds the nearest example in the store, then extracts parameters.
-   * Falls back to `SkipAPICall` when similarity is below `CONFIDENCE_THRESHOLD`.
+   * classify - embedding lookup only (no LLM call).
+   * Returns the best-matching tool and its similarity score.
    * @param input - raw user message
-   * @returns a typed API descriptor ready for the tool switch in main.ts
-   * @throws if the Ollama embedding API is unavailable
+   * @returns the matched tool name and its similarity score
    */
-  async route(input: string): Promise<WeatherTool | MovieTool | MusicTool | SkipTool> {
+  async classify(input: string): Promise<ClassifyResult> {
     const queryEmbedding = await fetchEmbedding(input);
     const { tool, score } = this.store.search(queryEmbedding);
 
-    if (score < this.CONFIDENCE_THRESHOLD) {
-      return { name: "skip_tool_call", action: "skip" };
+    if (score < CONFIDENCE_THRESHOLD) {
+      return { tool: "skip_tool_call", score: 0 };
     }
 
+    return { tool, score };
+  }
+
+  /**
+   * extract - LLM parameter extraction for a given tool.
+   * @param tool - the tool name to extract params for
+   * @param input - raw user message
+   * @returns the structured tool result
+   */
+  async extract(tool: string, input: string): Promise<WeatherTool | MovieTool | MusicTool | SkipTool> {
     switch (tool) {
       case "weather_request":
         return await b.ExtractWeatherParams(input);
@@ -127,6 +96,23 @@ export class ToolRouter {
       default:
         return { name: "skip_tool_call", action: "skip" };
     }
+  }
+
+  /**
+   * route - classifies user input and extracts params in one call.
+   * Kept for backward compatibility with eval tests.
+   * @param input - raw user message
+   * @returns the matched tool result and its similarity score
+   */
+  async route(input: string): Promise<RouteResult> {
+    const { tool, score } = await this.classify(input);
+
+    if (tool === "skip_tool_call") {
+      return { result: { name: "skip_tool_call", action: "skip" }, score };
+    }
+
+    const result = await this.extract(tool, input);
+    return { result, score };
   }
 }
 

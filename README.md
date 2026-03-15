@@ -12,7 +12,7 @@ BAML lets you define LLM functions with typed inputs/outputs in `.baml` files. T
 - **Streaming** — real-time streamed assistant responses
 - **Conversation history** — rolling window of the last 10 messages
 - **Session management** — isolated session state with UUID, message history, and tool call log
-- **Scope enforcement** — `IsInScope` BAML function gates `Chat` in code; out-of-scope requests get a hardcoded refusal
+- **Confidence-tiered scope enforcement** — high-confidence routes skip the LLM scope check; medium-confidence routes go through `IsInScope` before extraction
 - **Fallback clients** — automatic failover from OpenAI to local model
 
 ### Tools Available
@@ -26,31 +26,35 @@ BAML lets you define LLM functions with typed inputs/outputs in `.baml` files. T
 
 ### How It Works
 
+The main loop (`processTurn`) is split into focused functions for readability:
+
 ```
 User input
     │
     ▼
-toolRouter.route(input)
-    ├─ fetchEmbedding(input)           ~50ms  Ollama embeddings
-    ├─ VectorStore.search()            ~1ms   top-k cosine avg → tool name
-    └─ b.ExtractWeatherParams(input)   ~LLM   BAML extracts typed params
-         / b.ExtractMovieParams(input)
-         / b.ExtractMusicParams(input)
+classifyInput(content)                     embedding lookup, no LLM call
+    ├─ null → routing failed, abort
+    └─ { tool, score }
     │
     ▼
-WeatherTool | MovieTool | MusicTool | SkipTool  (typed, validated)
+tool === "skip_tool_call"?
+    ├─ yes → streamChatResponse(session)   plain Chat, no tool
+    └─ no  ↓
     │
     ▼
-Handler runs (mock API call), ToolCall logged to session
+score < HIGH_CONFIDENCE?
+    ├─ yes → isInScope(content)            LLM scope gate
+    │         └─ false → hardcoded refusal
+    └─ no  ↓
     │
     ▼
-b.IsInScope(input) → if false → hardcoded refusal, skip Chat
+executeToolAndRecordContext(session, tool, content)
+    ├─ toolRouter.extract(tool, input)     BAML extracts typed params
+    ├─ ToolCall logged to session
+    └─ fetchToolContext(tool)              mock API call
     │
     ▼
-Chat(messages) → BAML streams a natural language response
-    │
-    ▼
-Response printed, added to history
+streamChatResponse(session)                BAML streams natural language reply
 ```
 
 ---
@@ -83,14 +87,17 @@ Per query
     └─ Return the tool with the highest average score
 ```
 
-Confidence threshold: falls back to `SkipTool` when the best average score is below `0.35`.
+Confidence thresholds:
+- Below `0.35` → falls back to `SkipTool` (no tool call)
+- `0.35`–`0.55` → medium confidence, runs `IsInScope` LLM check before extraction
+- Above `0.55` → high confidence, skips scope check, extracts params directly
 
 ### How It Works
 
 ```
 Startup (once, ~3-5s)
     │
-    ├─ Embed ~48 example phrases (14 weather + 12 movie + 12 music + 10 skip)
+    ├─ Embed ~64 example phrases (14 weather + 12 movie + 12 music + 26 skip)
     └─ Store vectors in-memory
 
 Per query
@@ -104,7 +111,7 @@ Per query
 
 ### Example: Adding a New Tool
 
-1. **Add example phrases** to the `EXAMPLES` array in `src/router/toolRouter.ts`:
+1. **Add example phrases** to the `EXAMPLES` array in `src/router/examples.ts`:
 
 ```typescript
 {
@@ -137,7 +144,7 @@ function ExtractNewsParams(user_input: string) -> NewsTool {
 }
 ```
 
-3. **Add the route case** in `ToolRouter.route()`:
+3. **Add the extract case** in `ToolRouter.extract()`:
 
 ```typescript
 case "news_request":
@@ -148,13 +155,12 @@ case "news_request":
 
 ## Scope Enforcement
 
-Out-of-scope requests (books, math, shopping, etc.) are rejected before `Chat` is called:
+Scope enforcement is **confidence-tiered** — high-confidence routes (score >= `HIGH_CONFIDENCE_THRESHOLD`) skip the LLM scope check entirely, while medium-confidence routes pass through `isInScope()` before extraction:
 
 ```typescript
-const { in_scope: inScope } = await b.IsInScope(content);
-if (!inScope) {
-  console.log("Assistant: I can only help with weather, movies, and music.");
-  continue;
+if (score < HIGH_CONFIDENCE_THRESHOLD && !(await isInScope(content))) {
+  session.messages.push({ role: "assistant", content: "I can only help with weather, movies, and music." });
+  return;
 }
 ```
 
@@ -235,8 +241,10 @@ awesome-baml-framework/
 │   ├── clients.baml     # LLM client config (Ollama, OpenAI, fallback, retry policies)
 │   └── generators.baml  # TypeScript code generation config
 ├── baml_client/         # Auto-generated TypeScript client (do not edit)
+├── scripts/
+│   └── precompute-embeddings.ts  # Pre-generate embeddings to data/embeddings.json
 ├── src/
-│   ├── main.ts              # Main assistant loop with tool handlers + scope gate
+│   ├── main.ts              # Assistant loop: processTurn orchestrator + helper functions
 │   ├── evals/
 │   │   ├── router.eval.test.ts   # Router regression tests (music vs. movie boundary)
 │   │   ├── scope.eval.test.ts    # IsInScope guard evaluations (7 cases)
@@ -246,7 +254,8 @@ awesome-baml-framework/
 │   │   ├── session.ts       # Session class (UUID + messages + toolCalls log)
 │   │   └── toolCall.ts      # ToolCall record (id, name, args, result)
 │   └── router/
-│       ├── toolRouter.ts    # Hybrid router — initialize() + route()
+│       ├── toolRouter.ts    # Hybrid router — classify() + extract()
+│       ├── examples.ts      # Example phrases per tool for embedding training
 │       ├── vectorStore.ts   # In-memory top-k cosine similarity store
 │       └── embeddings.ts    # Ollama embeddings API client
 ├── vitest.config.ts     # Vitest config (120s timeout for LLM calls)
@@ -398,6 +407,7 @@ Tool call evaluations (LLM-as-judge)
 | `npm run eval:scope` | IsInScope guard tests only |
 | `npm run eval:context` | Context follow-up tests only |
 | `npm run eval:tools` | Tool extraction tests only |
+| `npm run precompute` | Pre-generate `data/embeddings.json` for fast startup |
 
 ## Learn More
 

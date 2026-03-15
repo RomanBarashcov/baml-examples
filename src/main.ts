@@ -1,13 +1,13 @@
 import "dotenv/config";
-import { b, Message, MovieTool, MusicTool, WeatherTool, SkipTool } from "../baml_client";
-import * as readline from "readline";
+import { b, Message, WeatherTool, MovieTool, MusicTool } from "../baml_client";
+import * as readline from "node:readline";
 import { BamlStream } from "@boundaryml/baml";
 import { Session } from "./state/session";
 import { ToolCall } from "./state/toolCall";
-import { toolRouter } from "./router/toolRouter";
-import { weatherHandler, WeatherToolResponse } from "./tools/weatherTool";
-import { movieHandler, MovieToolResponse } from "./tools/movieTool";
-import { musicHandler, MusicToolResponse } from "./tools/musicTool";
+import { toolRouter, HIGH_CONFIDENCE_THRESHOLD } from "./router/toolRouter";
+import { weatherHandler } from "./tools/weatherTool";
+import { movieHandler } from "./tools/movieTool";
+import { musicHandler } from "./tools/musicTool";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -17,18 +17,19 @@ const rl = readline.createInterface({
 const MAX_HISTORY = 10;
 
 /**
- * getRecentHistory - get recent history
- * @param msgs - messages
- * @returns Message[]
+ * getRecentHistory - returns the last N messages from the session.
+ * @param msgs - full message array
+ * @returns the most recent MAX_HISTORY messages
  */
 function getRecentHistory(msgs: Message[]): Message[] {
-  return msgs.length <= MAX_HISTORY ? msgs : msgs.slice(-MAX_HISTORY);
+  if (msgs.length <= MAX_HISTORY) return msgs;
+  return msgs.slice(-MAX_HISTORY);
 }
 
 /**
- * askQuestion - ask user question
- * @param query - question
- * @returns Promise<string>
+ * askQuestion - prompts the user for input via stdin.
+ * @param query - the prompt string to display
+ * @returns the user's input
  */
 function askQuestion(query: string): Promise<string> {
   return new Promise((resolve) => {
@@ -37,9 +38,9 @@ function askQuestion(query: string): Promise<string> {
 }
 
 /**
- * streamHandler - stream response from BAML
- * @param stream - BAML stream
- * @returns Promise<string>
+ * streamHandler - consumes a BAML stream and writes each delta to stdout.
+ * @param stream - the BAML stream to consume
+ * @returns the complete final response string
  */
 async function streamHandler(stream: BamlStream<string, string>): Promise<string> {
   let printed = 0;
@@ -59,79 +60,132 @@ async function streamHandler(stream: BamlStream<string, string>): Promise<string
   return await stream.getFinalResponse();
 }
 
+/**
+ * fetchToolContext - executes the matched tool and returns its LLM-readable context string.
+ * @param tool - the matched tool result (must not be SkipTool)
+ * @returns formatted context string for the LLM
+ */
+function fetchToolContext(tool: WeatherTool | MovieTool | MusicTool): string {
+  switch (tool.name) {
+    case "weather_request":
+      return weatherHandler(tool.city).context;
+    case "movie_request":
+      return movieHandler(tool.action).context;
+    case "music_request":
+      return musicHandler(tool.action).context;
+    default:
+      return "";
+  }
+}
 
 /**
- * main - main function
+ * streamChatResponse - streams a chat response and appends it to the session.
+ * @param session - current conversation session
  */
-async function main() {
-  let executing = true;
+async function streamChatResponse(session: Session): Promise<void> {
+  const stream = b.stream.Chat(getRecentHistory(session.messages));
+  const agentResponse = await streamHandler(stream);
+  session.messages.push({ role: "assistant", content: agentResponse });
+}
+
+/**
+ * classifyInput - classifies user input via embeddings.
+ * @param content - raw user input
+ * @returns tool name and confidence score, or null if routing failed
+ */
+async function classifyInput(content: string): Promise<{ tool: string; score: number } | null> {
+  try {
+    return await toolRouter.classify(content);
+  } catch (error) {
+    console.error("Routing failed:", error);
+    return null;
+  }
+}
+
+/**
+ * isInScope - checks whether a medium-confidence request is within the assistant's scope.
+ * @param content - raw user input
+ * @returns true if in scope or if the scope check passes
+ */
+async function isInScope(content: string): Promise<boolean> {
+  const scopeCheck = await b.IsInScope(content);
+  if (!scopeCheck.in_scope) {
+    console.log("Assistant: I can only help with weather, movies, and music.");
+    return false;
+  }
+  return true;
+}
+
+/**
+ * executeToolAndRecordContext - extracts tool params, records the tool call, and appends context.
+ * @param session - current conversation session
+ * @param toolName - the classified tool name
+ * @param content - raw user input
+ */
+async function executeToolAndRecordContext(session: Session, toolName: string, content: string): Promise<void> {
+  const useToolResponse = await toolRouter.extract(toolName, content) as WeatherTool | MovieTool | MusicTool;
+
+  session.toolCalls.push(
+    new ToolCall(session.toolCalls.length + 1, useToolResponse.name, JSON.stringify(useToolResponse))
+  );
+  session.messages.push(
+    { role: "tool", content: `Calling tool: ${useToolResponse.name} with params: ${JSON.stringify(useToolResponse)}` },
+    { role: "tool", content: fetchToolContext(useToolResponse) },
+  );
+}
+
+/**
+ * processTurn - handles a single user turn: routes, checks scope, executes tool, and streams a reply.
+ * High-confidence routes (score >= HIGH_CONFIDENCE_THRESHOLD) skip the LLM scope check.
+ * @param session - current conversation session
+ * @param content - raw user input
+ */
+async function processTurn(session: Session, content: string): Promise<void> {
+  session.messages.push({ role: "user", content });
+
+  const classification = await classifyInput(content);
+  if (!classification) {
+    session.messages.pop();
+    return;
+  }
+
+  const { tool, score } = classification;
+
+  if (tool === "skip_tool_call") {
+    await streamChatResponse(session);
+    return;
+  }
+
+  if (score < HIGH_CONFIDENCE_THRESHOLD && !(await isInScope(content))) {
+    session.messages.push({ role: "assistant", content: "I can only help with weather, movies, and music." });
+    return;
+  }
+
+  await executeToolAndRecordContext(session, tool, content);
+  await streamChatResponse(session);
+}
+
+/**
+ * main - runs the assistant REPL loop until the user types 'quit'.
+ */
+async function main(): Promise<void> {
   const session = new Session();
 
   await toolRouter.initialize();
 
-  while (executing) {
-    let content = await askQuestion("Enter your message (or 'quit' to exit): ");
+  while (true) {
+    const content = await askQuestion("Enter your message (or 'quit' to exit): ");
 
     if (content.trim().toLocaleLowerCase() === "quit") {
       console.log("Exiting...");
-      executing = false;
       break;
     }
 
-    session.messages.push({ role: "user", content });
-
-    let useToolResponse: WeatherTool | MovieTool | MusicTool | SkipTool;
-    try {
-      useToolResponse = await toolRouter.route(content);
-
-      const toolCall = new ToolCall(
-        session.toolCalls.length + 1,
-        useToolResponse.name,
-        JSON.stringify(useToolResponse)
-      );
-
-      session.toolCalls.push(toolCall);
-      session.messages.push({ role: "tool", content: `Calling tool: ${useToolResponse.name} with params: ${JSON.stringify(useToolResponse)}` });
-    } catch (error) {
-      console.error("Sorry, I couldn't understand your request. Please try again.");
-      continue;
-    }
-
-    if (useToolResponse.name !== "skip_tool_call") {
-      let toolResponse: string;
-      switch (useToolResponse.name) {
-        case "weather_request":
-          toolResponse = (weatherHandler(useToolResponse.city) as WeatherToolResponse).context;
-          break;
-        case "movie_request":
-          toolResponse = (movieHandler(useToolResponse.action) as MovieToolResponse).context;
-          break;
-        case "music_request":
-          toolResponse = (musicHandler(useToolResponse.action) as MusicToolResponse).context;
-          break;
-      }
-      session.messages.push({ role: "tool", content: toolResponse });
-    } else {
-      // Remove the "Calling tool: skip_tool_call" message we just pushed —
-      // it adds noise and causes the LLM to think it can't answer from context.
-      session.messages.pop();
-    }
-
-    const { in_scope: inScope } = await b.IsInScope(content);
-    if (!inScope) {
-      console.log("Assistant: I can only help with weather, movies, and music.");
-      session.messages.push({ role: "assistant", content: "I can only help with weather, movies, and music." });
-      continue;
-    }
-
-    const stream = b.stream.Chat(getRecentHistory(session.messages));
-    const agentResponse = await streamHandler(stream);
-
-    session.messages.push({ role: "assistant", content: agentResponse });
+    await processTurn(session, content);
   }
 
   console.log("Stop Executing...:");
   rl.close();
 }
 
-main().then(r => r).catch(e => console.error("Error:", e));
+await main();

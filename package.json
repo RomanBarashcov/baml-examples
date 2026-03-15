@@ -4,18 +4,19 @@
   "description": "",
   "license": "ISC",
   "author": "",
-  "type": "commonjs",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "baml-generate": "baml-cli generate",
     "build": "npm run baml-generate && tsc --build",
-    "start": "npm run build && node dist/src/main.js",
+    "start": "npm run baml-generate && npx tsx src/main.ts",
     "eval": "npm run baml-generate && vitest run src/evals/",
     "eval:router": "npm run baml-generate && vitest run src/evals/router.eval.test.ts",
     "eval:scope": "npm run baml-generate && vitest run src/evals/scope.eval.test.ts",
     "eval:context": "npm run baml-generate && vitest run src/evals/context.eval.test.ts",
     "eval:tools": "npm run baml-generate && vitest run src/evals/tools.eval.test.ts",
-    "test:baml": "baml-cli test"
+    "test:baml": "baml-cli test",
+    "precompute": "npx tsx scripts/precompute-embeddings.ts"
   },
   "devDependencies": {
     "@types/node": "^25.3.1",
