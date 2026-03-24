@@ -1,14 +1,16 @@
-import { Message } from "../baml_client";
+import { Message } from "../../baml_client";
 import { UUID } from "crypto";
-
+import { ToolCall } from "./toolCall";
 
 export class Session {
     public id: UUID;
     public messages: Message[];
+    public toolCalls: ToolCall[];
 
     constructor() {
         this.id = crypto.randomUUID();
         this.messages = [];
+        this.toolCalls = [];
     }
 
     addMessage(message: Message) {
